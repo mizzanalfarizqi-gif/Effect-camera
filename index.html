@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Effect Camera V2</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;overflow:hidden;background:#000;font-family:-apple-system,BlinkMacSystemFont,sans-serif}
+#app{position:fixed;inset:0;background:#000}
+#cam{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#fx{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+#top{position:absolute;top:max(10px,env(safe-area-inset-top));left:0;right:0;z-index:10;display:flex;justify-content:space-between;padding:10px 14px}
+.pill{border:1px solid #fff3;background:#0008;color:#fff;border-radius:999px;padding:9px 13px;font-weight:700}
+#effects{position:absolute;bottom:112px;left:0;right:0;z-index:11;display:flex;gap:8px;overflow:auto;padding:8px 12px;scrollbar-width:none}
+#effects::-webkit-scrollbar{display:none}
+.e{min-width:70px;height:65px;border:1px solid #fff2;border-radius:15px;background:#0009;color:#fff;font-size:28px}
+.e small{display:block;font-size:10px;margin-top:2px}
+.e.on{border-color:#fff;background:#fff3}
+#bottom{position:absolute;bottom:max(15px,env(safe-area-inset-bottom));left:0;right:0;z-index:12;display:flex;justify-content:center}
+#rec{width:78px;height:78px;border:5px solid #fff;border-radius:50%;background:#fff}
+#rec span{display:block;width:60px;height:60px;border-radius:50%;background:#fff;margin:4px}
+#rec.live span{width:34px;height:34px;border-radius:8px;background:#f33;margin:18px}
+#joystick{position:absolute;z-index:12;left:18px;bottom:135px;width:110px;height:110px;border-radius:50%;background:#0006;border:2px solid #fff5;touch-action:none}
+#stick{position:absolute;width:48px;height:48px;border-radius:50%;left:31px;top:31px;background:#fff9;border:2px solid #fff}
+#hint{position:absolute;z-index:12;left:50%;transform:translateX(-50%);bottom:190px;white-space:nowrap;background:#0008;color:#fff;padding:7px 11px;border-radius:18px;font-size:11px}
+#status{position:absolute;z-index:20;top:70px;left:50%;transform:translateX(-50%);background:#000b;padding:8px 12px;border-radius:18px;color:#fff;font-size:12px;display:none}
+#save{display:none;position:absolute;z-index:30;left:50%;top:50%;transform:translate(-50%,-50%);background:#fff;color:#000;padding:15px 20px;border-radius:15px;font-weight:800;text-decoration:none}
+</style>
+</head>
+<body>
+<div id="app">
+<video id="cam" autoplay playsinline muted></video>
+<canvas id="fx"></canvas>
+
+<div id="top">
+ <div class="pill">🎬 Effect Camera V2</div>
+ <button id="flip" class="pill">🔄 Kamera</button>
+</div>
+<div id="status"></div>
+<div id="hint">🎮 Gerakkan karakter dengan joystick • atau sentuh karakter</div>
+
+<div id="joystick"><div id="stick"></div></div>
+<div id="effects"></div>
+<div id="bottom"><button id="rec"><span></span></button></div>
+<a id="save">⬇️ Simpan video</a>
+</div>
+
+<script>
+const cam=document.getElementById('cam'), canvas=document.getElementById('fx'), ctx=canvas.getContext('2d');
+const effects=document.getElementById('effects'), joystick=document.getElementById('joystick'), stick=document.getElementById('stick');
+const rec=document.getElementById('rec'), save=document.getElementById('save'), statusEl=document.getElementById('status');
+let facing='environment', stream, selected='yellow', pos={x:.52,y:.45}, joy={x:0,y:0}, dragging=false;
+let t0=performance.now(), recorder, chunks=[], recording=false;
+
+const chars=[
+ ['yellow','🟡','Karakter Kuning'],['wood','🪵','Drum Sahur'],['ghost','👻','Hantu'],['alien','👽','Alien'],['bat','🦇','Kelelawar']
+];
+chars.forEach((x,i)=>{
+ const b=document.createElement('button'); b.className='e'+(i===0?' on':''); b.innerHTML=x[1]+'<small>'+x[2]+'</small>';
+ b.onclick=()=>{document.querySelectorAll('.e').forEach(z=>z.classList.remove('on'));b.classList.add('on');selected=x[0]};
+ effects.appendChild(b);
+});
+function msg(s,ms=1600){statusEl.textContent=s;statusEl.style.display='block';clearTimeout(msg.x);msg.x=setTimeout(()=>statusEl.style.display='none',ms)}
+
+async function camera(){
+ try{
+  if(stream) stream.getTracks().forEach(t=>t.stop());
+  stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:facing,width:{ideal:1280},height:{ideal:1920}},audio:true});
+  cam.srcObject=stream; await cam.play(); msg('Kamera siap');
+ }catch(e){msg('Izinkan Kamera & Mikrofon di Safari')}
+}
+camera();
+document.getElementById('flip').onclick=()=>{facing=facing==='environment'?'user':'environment';camera()};
+
+function resize(){canvas.width=innerWidth*devicePixelRatio;canvas.height=innerHeight*devicePixelRatio;ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0)}
+addEventListener('resize',resize);resize();
+
+function roundRect(x,y,w,h,r){ctx.beginPath();ctx.roundRect(x,y,w,h,r);ctx.fill()}
+function drawCharacter(type,x,y,s,time){
+ const moving=Math.hypot(joy.x,joy.y)>.08;
+ const bob=Math.sin(time*7)* (moving?4:2);
+ ctx.save();ctx.translate(x,y+bob);
+ const k=1+Math.sin(time*5)*.015;
+ ctx.scale(s*k,s*k);
+
+ if(type==='yellow'){
+   // Original yellow helper character (not a copy of any branded character)
+   ctx.fillStyle='#ffd21a';roundRect(-43,-65,86,120,28);
+   ctx.fillStyle='#24334a';roundRect(-43,-5,86,28,4);
+   ctx.fillStyle='#e8b800';roundRect(-28,50,22,18,7);roundRect(6,50,22,18,7);
+   ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(-16,-38,15,0,7);ctx.arc(16,-38,15,0,7);ctx.fill();
+   ctx.fillStyle='#222';ctx.beginPath();ctx.arc(-16,-38,6,0,7);ctx.arc(16,-38,6,0,7);ctx.fill();
+   ctx.strokeStyle='#ffd21a';ctx.lineWidth=10;ctx.lineCap='round';
+   const swing=Math.sin(time*9)*18;ctx.beginPath();ctx.moveTo(-42,10);ctx.lineTo(-68,25+swing/3);ctx.moveTo(42,10);ctx.lineTo(68,25-swing/3);ctx.stroke();
+ } else if(type==='wood'){
+   ctx.fillStyle='#a76532';roundRect(-38,-70,76,118,22);
+   ctx.fillStyle='#704020';roundRect(-27,-52,54,20,8);
+   ctx.fillStyle='#f2d09b';ctx.beginPath();ctx.arc(0,-42,8,0,7);ctx.fill();
+   ctx.fillStyle='#222';ctx.beginPath();ctx.arc(-15,-20,5,0,7);ctx.arc(15,-20,5,0,7);ctx.fill();
+   ctx.strokeStyle='#a76532';ctx.lineWidth=9;ctx.lineCap='round';
+   const sw=Math.sin(time*10)*20;ctx.beginPath();ctx.moveTo(-35,5);ctx.lineTo(-68,sw);ctx.moveTo(35,5);ctx.lineTo(68,-sw);ctx.stroke();
+   ctx.fillStyle='#c88b4a';ctx.beginPath();ctx.arc(0,22,28,0,7);ctx.fill();ctx.strokeStyle='#5a351f';ctx.lineWidth=3;ctx.stroke();
+ } else if(type==='ghost'){
+   ctx.fillStyle='rgba(235,245,255,.92)';ctx.beginPath();ctx.arc(0,-20,50,Math.PI,0);ctx.lineTo(50,48);ctx.quadraticCurveTo(25,25,0,50);ctx.quadraticCurveTo(-25,25,-50,48);ctx.closePath();ctx.fill();
+   ctx.fillStyle='#222';ctx.beginPath();ctx.arc(-18,-20,7,0,7);ctx.arc(18,-20,7,0,7);ctx.fill();
+ } else if(type==='alien'){
+   ctx.fillStyle='#71e58b';ctx.beginPath();ctx.ellipse(0,-18,47,60,0,0,7);ctx.fill();
+   ctx.fillStyle='#111';ctx.beginPath();ctx.ellipse(-17,-25,10,22,0,0,7);ctx.ellipse(17,-25,10,22,0,0,7);ctx.fill();
+   ctx.strokeStyle='#71e58b';ctx.lineWidth=10;ctx.lineCap='round';const a=Math.sin(time*8)*15;
+   ctx.beginPath();ctx.moveTo(-38,10);ctx.lineTo(-70,a);ctx.moveTo(38,10);ctx.lineTo(70,-a);ctx.stroke();
+ } else if(type==='bat'){
+   ctx.fillStyle='#7046a8';ctx.beginPath();ctx.ellipse(0,0,22,45,0,0,7);ctx.fill();
+   const flap=Math.sin(time*12)*18;ctx.beginPath();ctx.moveTo(-15,-5);ctx.quadraticCurveTo(-65,-55-flap,-90,0);ctx.quadraticCurveTo(-55,5,-15,25);ctx.fill();ctx.beginPath();ctx.moveTo(15,-5);ctx.quadraticCurveTo(65,-55-flap,90,0);ctx.quadraticCurveTo(55,5,15,25);ctx.fill();
+ }
+ ctx.restore();
+}
+
+function drawScene(targetCtx,w,h,videoSource=true){
+ if(videoSource){
+  const vw=cam.videoWidth||1280,vh=cam.videoHeight||720,sc=Math.max(w/vw,h/vh),dw=vw*sc,dh=vh*sc,dx=(w-dw)/2,dy=(h-dh)/2;
+  targetCtx.fillStyle='#000';targetCtx.fillRect(0,0,w,h);
+  if(facing==='user'){targetCtx.save();targetCtx.translate(w,0);targetCtx.scale(-1,1)}
+  targetCtx.drawImage(cam,dx,dy,dw,dh);if(facing==='user')targetCtx.restore();
+ }
+ drawCharacter(selected,pos.x*w,pos.y*h,Math.min(w,h)/180,performance.now()/1000);
+}
+
+function loop(){
+ ctx.clearRect(0,0,innerWidth,innerHeight);
+ const speed=0.0018;
+ pos.x=Math.min(.94,Math.max(.06,pos.x+joy.x*speed));
+ pos.y=Math.min(.90,Math.max(.08,pos.y+joy.y*speed));
+ drawScene(ctx,innerWidth,innerHeight,false);
+ requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// Character dragging
+canvas.addEventListener('pointerdown',e=>{
+ const px=pos.x*innerWidth,py=pos.y*innerHeight;
+ if(Math.hypot(e.clientX-px,e.clientY-py)<100){dragging=true;canvas.setPointerCapture(e.pointerId)}
+});
+canvas.addEventListener('pointermove',e=>{if(dragging){pos.x=Math.min(.94,Math.max(.06,e.clientX/innerWidth));pos.y=Math.min(.90,Math.max(.08,e.clientY/innerHeight))}});
+canvas.addEventListener('pointerup',()=>dragging=false);
+
+// Joystick
+let joyActive=false;
+function joyMove(e){
+ const r=joystick.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2;
+ let dx=e.clientX-cx,dy=e.clientY-cy, m=Math.hypot(dx,dy),max=38;
+ if(m>max){dx=dx/m*max;dy=dy/m*max}
+ joy.x=dx/max;joy.y=dy/max;
+ stick.style.transform=`translate(${dx}px,${dy}px)`;
+}
+joystick.addEventListener('pointerdown',e=>{joyActive=true;joystick.setPointerCapture(e.pointerId);joyMove(e)});
+joystick.addEventListener('pointermove',e=>{if(joyActive)joyMove(e)});
+function joyUp(){joyActive=false;joy.x=joy.y=0;stick.style.transform='translate(0,0)'}
+joystick.addEventListener('pointerup',joyUp);joystick.addEventListener('pointercancel',joyUp);
+
+// Recording composited camera + animated character
+async function startRec(){
+ if(!stream){msg('Kamera belum siap');return}
+ const out=document.createElement('canvas');out.width=720;out.height=1280;const oc=out.getContext('2d');
+ const cs=out.captureStream(30);
+ try{
+  const ac=new (window.AudioContext||window.webkitAudioContext)(),src=ac.createMediaStreamSource(stream),dest=ac.createMediaStreamDestination();src.connect(dest);dest.stream.getAudioTracks().forEach(t=>cs.addTrack(t));
+ }catch(e){}
+ const mime=['video/mp4;codecs=h264','video/webm;codecs=vp8,opus','video/webm'].find(x=>MediaRecorder.isTypeSupported(x))||'';
+ recorder=new MediaRecorder(cs,mime?{mimeType:mime,videoBitsPerSecond:5500000}:undefined);chunks=[];
+ recorder.ondataavailable=e=>e.data.size&&chunks.push(e.data);
+ recorder.onstop=()=>{
+  const blob=new Blob(chunks,{type:recorder.mimeType||'video/webm'}),url=URL.createObjectURL(blob);
+  save.href=url;save.download='effect-camera.mp4';save.style.display='block';msg('Video selesai. Tekan Simpan.');
+ };
+ let alive=true;
+ recorder.start(200);recording=true;rec.classList.add('live');msg('🔴 Merekam...',900);
+ function draw(){if(!alive)return;drawScene(oc,720,1280,true);requestAnimationFrame(draw)}
+ draw();recorder._stop=()=>{alive=false};
+}
+function stopRec(){if(recorder&&recording){recording=false;recorder._stop?.();recorder.stop();rec.classList.remove('live')}}
+rec.onclick=()=>recording?stopRec():startRec();
+</script>
+</body>
+</html>
